@@ -1,0 +1,12 @@
+# File: .gitignore
+# Purpose: Keep private raw data, generated outputs, and caches out of version control.
+.DS_Store
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+data/raw/
+data/processed/
+data/translated/
+artifacts/
+*.log

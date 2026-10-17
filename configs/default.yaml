@@ -1,0 +1,10 @@
+# File: configs/default.yaml
+# Purpose: Document the reproducible default experiment settings.
+seed: 42
+data_root: data/raw
+processed_root: data/processed
+artifact_root: artifacts
+smoke_students: 25
+split: per_student_chronological_70_15_15_min5
+mastery_target: 0.7
+top_n: 5
