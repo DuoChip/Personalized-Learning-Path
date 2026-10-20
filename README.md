@@ -121,6 +121,8 @@ Thêm `--new-problem-id Pm_668265 --new-is-correct 0` để cập nhật hồ s�
 
 Notebook EDA hỗ trợ local/Colab; trên Colab nó mount Drive, cài requirements và dùng các biến đường dẫn có thể chỉnh. Sau khi đánh giá chất lượng, mở [`notebooks/moocradar_colab.ipynb`](notebooks/moocradar_colab.ipynb), đặt `PROJECT_ROOT` và `DATA_ROOT`, chọn `smoke_test` hoặc `full_run`, rồi chạy tuần tự. Baseline và BKT dùng CPU; GPU không bắt buộc. Artifacts/checkpoints được ghi vào Drive.
 
+Kết quả chạy trên Google Colab được lưu tại [thư mục Google Drive của dự án](https://drive.google.com/drive/folders/1o07j0q612DXwAVOrbIzeioMYRTqwKZ44?usp=sharing).
+
 ## 15. Artifacts được lưu
 
 Run EDA và run mô hình có `run_id` khác nhau; không ghi đè âm thầm run trước. Xem [hợp đồng đầu ra](docs/OUTPUT_CONTRACT.md) để biết schema từng file, ý nghĩa của `mastery`/`probability_correct`, cách xử lý ô trống và vị trí hình. Chỉ dùng run có `manifest.json` báo `status: complete`.
