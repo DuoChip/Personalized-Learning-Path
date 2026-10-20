@@ -9,7 +9,8 @@ data/raw/*.json
   └─> streaming validation và chuẩn hóa
         └─> data/processed/{smoke|full}/
               └─> chia thời gian theo sinh viên (70/15/15)
-                    └─> baseline + Bayesian Knowledge Tracing (BKT)
+                    ├─> baseline + Bayesian Knowledge Tracing (BKT)
+                    └─> NCDM + sparse Q-matrix + stable ID mappings
                           └─> dự đoán, metrics, mastery, gaps, learning paths
                                 └─> artifacts/<run_id>/
 ```
@@ -23,6 +24,18 @@ Mỗi lượt trả lời được giữ thành một dòng trong `interactions.
 Baseline dùng tỷ lệ đúng theo concept từ **train**, làm mượt bằng 10 quan sát giả ở tỷ lệ đúng toàn cục của train. BKT ước lượng bốn tham số chung (`initial`, `learn`, `guess`, `slip`) bằng likelihood trên tối đa 800 chuỗi sinh viên–concept lấy từ train. Nếu dưới 10 chuỗi đủ điều kiện, chương trình dùng giá trị mặc định đã ghi trong mã. Trạng thái mastery được lưu riêng cho từng sinh viên–concept.
 
 Với sinh viên có từ năm lượt trở lên, dữ liệu được sắp xếp ổn định theo `submit_time`, rồi chia khoảng 70% train, 15% validation và phần còn lại test. Sinh viên có ít hơn năm lượt chỉ thuộc train. Dự đoán được tính **trước** khi cập nhật trạng thái bằng kết quả của lượt hiện tại. Sau khi dự đoán validation, nhãn validation được dùng để cập nhật trạng thái cho các lượt test xảy ra sau đó. Đây là đánh giá warm-start theo dòng thời gian; khác với đánh giá test bằng trạng thái đóng băng.
+
+## Nhánh NCDM
+
+Adapter NCDM tái sử dụng `interactions.csv`, `problems.csv` và `problem_concepts.csv`. Mapping student/problem/concept được tạo một lần trên toàn bộ tập ID, sau đó giữ nguyên giữa mọi split và inference. Việc xây mapping không đọc label làm feature. Q-matrix được lưu dạng COO nén trong `models/q_matrix.npz`; DataLoader chỉ tạo dense Q-row cho mini-batch hiện tại.
+
+Granularity là một phần của config. `middle` ánh xạ mỗi problem sang `exercise_id` và là mặc định vì tập full có 580 middle concept đang hoạt động, Q-row đầy đủ và footprint phù hợp Colab. `fine` dùng các concept metadata và bảo toàn nhiều-nhiều; `coarse` dùng `course_id`. Một run dùng cùng granularity cho baseline, BKT và NCDM.
+
+NCDM học `sigmoid(student_embedding)` như proficiency theo concept, `sigmoid(problem_difficulty)` theo concept và discrimination dương cho từng problem. Tương tác đầu vào là `discrimination × (proficiency - difficulty) × Q`. Các lớp phi tuyến phía sau dùng trọng số không âm và sigmoid, nên tăng proficiency trên concept liên quan không làm giảm xác suất đúng. Hidden size/dropout có thể cấu hình; thay đổi này không thay cấu trúc nhận thức của NeuralCDM chuẩn.
+
+Protocol so sánh chính đóng băng tất cả trạng thái sau train: baseline train-only, `bkt_frozen` và checkpoint NCDM. `bkt_online` được xuất riêng để giữ chính sách BKT prequential của pipeline trước đây; validation/test label chỉ được dùng sau khi prediction tương ứng đã ghi. Metrics và prediction luôn giữ cùng event IDs, nhưng không diễn giải `bkt_online` như policy tương đương NCDM.
+
+Mastery NCDM lấy trực tiếp từ student proficiency vector. `observation_count` chỉ đếm train evidence. Concept chưa quan sát nhưng thuộc khóa học đích có thể có model estimate, song được gắn `unobserved_model_estimate` và không được coi là đã xác nhận. Gap/ranking tái sử dụng module hiện có, không thêm prerequisite/video suy đoán. Standard NCDM không cập nhật tức thời; checkpoint cần retrain định kỳ, trong khi BKT inference vẫn độc lập và có thể update từng event.
 
 `student_mastery.csv` và các lộ trình phản ánh trạng thái **sau toàn bộ lịch sử quan sát**, kể cả các lượt test. Không dùng các bảng này làm đầu vào cho phép đánh giá dự đoán test. Seed, split indices, cấu hình, tham số và dự đoán đều được lưu theo `run_id`.
 

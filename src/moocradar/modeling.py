@@ -79,8 +79,20 @@ def fit_bkt(sequences: list[list[int]]) -> dict:
     return {**dict(zip(defaults, map(float, result.x))), "fit_status": "optimized" if result.success else "optimizer_limit"}
 
 
-def load_links(processed_dir: Path) -> tuple[dict, dict, dict]:
+def load_links(processed_dir: Path, granularity: str = "fine") -> tuple[dict, dict, dict]:
+    """Load problem metadata and concept links at a declared granularity."""
+    if granularity not in ("coarse", "middle", "fine"):
+        raise ValueError("granularity must be coarse, middle, or fine")
     problems = {row["problem_id"]: row for row in read_csv(processed_dir / "problems.csv")}
+    if granularity != "fine":
+        field = "exercise_id" if granularity == "middle" else "course_id"
+        links = {
+            problem_id: [problem[field]]
+            for problem_id, problem in problems.items()
+            if problem.get(field)
+        }
+        names = {values[0]: values[0] for values in links.values()}
+        return problems, links, names
     links = defaultdict(list)
     for row in read_csv(processed_dir / "problem_concepts.csv"):
         links[row["problem_id"]].append(row["concept_id"])
@@ -88,9 +100,10 @@ def load_links(processed_dir: Path) -> tuple[dict, dict, dict]:
     return problems, dict(links), names
 
 
-def fit_models(processed_dir: Path, seed: int = 42) -> tuple[dict, dict, dict]:
+def fit_models(processed_dir: Path, seed: int = 42,
+               granularity: str = "fine") -> tuple[dict, dict, dict]:
     """Fit train-only concept frequencies and a bounded sample of BKT sequences."""
-    _, links, _ = load_links(processed_dir)
+    _, links, _ = load_links(processed_dir, granularity)
     counts = defaultdict(lambda: [0, 0])
     global_correct = 0
     global_total = 0
@@ -125,7 +138,8 @@ def fit_models(processed_dir: Path, seed: int = 42) -> tuple[dict, dict, dict]:
     prior = (global_correct + 1) / (global_total + 2)
     baseline = {"global_probability": prior, "smoothing": 10, "concept_counts": dict(counts)}
     bkt = fit_bkt(sampled)
-    training = {"train_interactions": global_total, "sampled_bkt_sequences": len(sampled), "seed": seed}
+    training = {"train_interactions": global_total, "sampled_bkt_sequences": len(sampled),
+                "seed": seed, "granularity": granularity}
     return baseline, bkt, training
 
 

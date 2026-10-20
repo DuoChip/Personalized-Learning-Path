@@ -8,3 +8,14 @@ smoke_students: 25
 split: per_student_chronological_70_15_15_min5
 mastery_target: 0.7
 top_n: 5
+ncdm:
+  granularity: middle
+  batch_size: 512
+  learning_rate: 0.002
+  epochs: 20
+  patience: 4
+  hidden_dims: [256, 128]
+  dropout: 0.5
+  num_workers: 0
+  early_stopping_metric: roc_auc
+  threshold_strategy: fixed_0.5
