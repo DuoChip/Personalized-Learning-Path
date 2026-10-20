@@ -168,3 +168,5 @@ python -m compileall -q src
 - [Yu và cộng sự, bài báo MoocRadar](https://arxiv.org/abs/2304.02205)
 - [Implementation NeuralCDM chính thức](https://github.com/bigdata-ustc/Neural_Cognitive_Diagnosis-NeuralCD)
 - [Wang và cộng sự, Neural Cognitive Diagnosis](https://arxiv.org/abs/1908.08733)
+
+Giải thích chi tiết bằng tiếng Việt về trực giác, đầu vào, Q-matrix, kiến trúc, mastery và giới hạn của NCDM nằm tại [docs/NCDM_EXPLAINED.md](docs/NCDM_EXPLAINED.md).
