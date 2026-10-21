@@ -341,9 +341,11 @@ Không nên kết luận NCDM tốt hơn BKT chỉ vì NCDM phức tạp hơn. H
 
 Trong run NCDM hiện tại:
 
-- `bkt_frozen` chỉ dùng trạng thái sau train, phù hợp hơn cho so sánh chính với NCDM.
-- `bkt_online` dự đoán trước rồi cập nhật bằng từng response validation/test; đây là kết quả bổ sung.
-- NCDM dùng checkpoint đóng băng cho validation/test.
+- `bkt_frozen` là thử nghiệm đối chứng: chỉ dùng trạng thái sau train và không cập nhật bằng validation/test, nên phù hợp hơn cho so sánh chính với NCDM.
+- `bkt_online` là policy vận hành tuần tự: dự đoán trước rồi cập nhật bằng từng response đã quan sát để điều chỉnh trạng thái và đề xuất tiếp theo.
+- NCDM là phương pháp bổ sung để chẩn đoán proficiency theo concept và dùng checkpoint đóng băng cho validation/test.
+
+BKT Frozen và BKT Online dùng cùng cơ chế BKT; chúng khác nhau ở chính sách cập nhật trạng thái, không phải là hai thuật toán được train độc lập. NCDM hiện không thay thế khả năng cập nhật theo từng response của BKT Online. Xem [ALGORITHMS.md](ALGORITHMS.md) để đọc mô tả thống nhất về vai trò của ba phương pháp.
 
 ## 12. Cách đánh giá NCDM
 
@@ -363,7 +365,7 @@ Pipeline báo cáo:
 
 Threshold hiện tại là 0,5 và được ghi trong config/manifest. Nếu thay threshold, quy tắc lựa chọn chỉ được fit trên validation, không được chọn trên test.
 
-Full run hiện tại cho thấy NCDM có ROC-AUC và balanced accuracy cao hơn baseline middle, nhưng Brier, Accuracy và F1 thấp hơn. Điều này cho thấy NCDM phân biệt/ranking tốt hơn trong run này nhưng chưa calibration tốt hơn tuyệt đối.
+Artifact chính thức `20261020T160618189951Z_ncdm_3d00a8` cho thấy NCDM có test ROC-AUC 0,723662 và balanced accuracy 0,636039, cao hơn baseline middle ở hai chỉ số này. Tuy nhiên, test Brier 0,164394, Accuracy 0,742435 và F1 0,835025 thấp hơn baseline. Điều này cho thấy NCDM phân biệt/ranking tốt hơn trong run này nhưng chưa calibration hoặc phân loại tại threshold 0,5 tốt hơn tuyệt đối.
 
 Xem số liệu chi tiết tại [RESULTS.md](RESULTS.md).
 

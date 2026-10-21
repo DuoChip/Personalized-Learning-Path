@@ -1,6 +1,8 @@
 # Hợp đồng đầu ra cho nhóm dashboard và frontend
 
-Mỗi lần chạy tạo thư mục `artifacts/<run_id>/` mới; không ghi đè run cũ. Kiểm tra `manifest.json` có `status: complete` trước khi dùng. CSV dùng UTF-8, có header kể cả khi không có dòng dữ liệu. ID sinh viên là ID từ bộ dữ liệu gốc và cần được xử lý phù hợp khi chia sẻ.
+Mỗi lần chạy tạo thư mục `artifacts/<run_id>/` mới; không ghi đè run cũ. Artifact chính thức hiện tại là `artifacts/20261020T160618189951Z_ncdm_3d00a8/`. Frontend và inference phải trỏ tường minh vào run này và kiểm tra `manifest.json` có `status: complete` trước khi dùng.
+
+Các run mô hình trước đây nằm trong `artifacts/OLD/` và chỉ được giữ để truy vết; không tự động chọn file mới nhất bên trong thư mục này. Run `artifacts/eda_20261017T155226873628Z_da4915/` là EDA sample độc lập, không phải checkpoint mô hình. CSV dùng UTF-8, có header kể cả khi không có dòng dữ liệu. ID sinh viên là ID từ bộ dữ liệu gốc và cần được xử lý phù hợp khi chia sẻ.
 
 ## Run huấn luyện mô hình
 
@@ -21,6 +23,22 @@ Mỗi lần chạy tạo thư mục `artifacts/<run_id>/` mới; không ghi đè
 | `training_history.csv` | `epoch,train_loss,validation_roc_auc,validation_brier` | Dữ liệu gốc của training curves |
 | `plots/`, `logs/training.log` | PNG và log | Loss, validation AUC, ROC, PR, confusion matrix, probability distribution |
 
+## Dùng file nào cho chức năng nào?
+
+```text
+predictions.csv -> metrics.csv/plots       (đánh giá model)
+NCDM checkpoint -> student_mastery.csv     (hồ sơ concept)
+student_mastery.csv -> knowledge_gaps.csv  (concept cần hỗ trợ)
+knowledge_gaps.csv -> learning_paths.csv   (Top-N bài luyện tập)
+```
+
+- Dashboard so sánh model đọc `metrics.csv`; chỉ mở `predictions.csv` khi cần xem chi tiết từng event.
+- Learner profile đọc `student_mastery.csv`, ưu tiên hiển thị `mastery_probability`, `mastery_level`, `observation_count` và `evidence_status`.
+- Màn hình điểm yếu đọc `knowledge_gaps.csv`; `priority` là điểm ưu tiên heuristic, không phải xác suất.
+- Màn hình đề xuất đọc `learning_paths.csv`, lọc theo `user_id` và sắp xếp `rank`; `score` là điểm ranking, không phải `probability_correct`.
+
+Trong artifact chính thức, bốn model cùng xuất dự đoán để đánh giá, nhưng `student_mastery.csv`, `knowledge_gaps.csv` và `learning_paths.csv` được sinh từ NCDM. Không lấy `probability_correct` của BKT/NCDM trong `predictions.csv` rồi ghi thành mastery. Xem [ALGORITHMS.md](ALGORITHMS.md#luồng-đầu-vào-và-đầu-ra-trong-dự-án) để biết ví dụ end-to-end.
+
 Trong run BKT, `mastery` là xác suất trạng thái tiềm ẩn đã học và `probability_correct` còn xét guess/slip. Trong run NCDM, `mastery` và `mastery_probability` đều lấy từ `sigmoid(student_proficiency)`; `probability_correct` để trống vì đại lượng đó chỉ có nghĩa khi kết hợp thêm problem, Q-row, difficulty, discrimination và prediction network. Không dùng xác suất đúng của một problem thay cho mastery.
 
 `confidence = n/(n+5)`, `insufficient_evidence = n<3`, `mastery_level` và threshold mastery là heuristic hiển thị. NCDM có thể xuất proficiency cho concept chưa quan sát trong khóa học đích, nhưng dòng đó phải có `observation_count=0`, `insufficient_evidence=1`, `evidence_status=unobserved_model_estimate`; đây không phải năng lực đã được xác nhận. Run BKT cũ chỉ có dòng cho concept đã quan sát.
@@ -31,7 +49,11 @@ Lệnh `demo --model ncdm` load `best_ncdm.pt`, mappings và Q-matrix. NCDM khô
 
 ## Chính sách so sánh trong run NCDM
 
-`smoothed_concept`, `bkt_frozen` và `ncdm` là protocol chính: chỉ dùng train để fit/trạng thái, sau đó checkpoint đóng băng trên validation/test. `bkt_online` là kết quả bổ sung: dự đoán sự kiện trước, rồi mới cập nhật bằng label của sự kiện đó cho lần tiếp theo. Không so sánh `bkt_online` với NCDM như hai policy lịch sử giống nhau. Threshold mặc định là 0,5; nếu sau này chọn threshold khác, chỉ được fit quy tắc trên validation và phải ghi vào config/manifest.
+`smoothed_concept`, `bkt_frozen` và `ncdm` là protocol chính: chỉ dùng train để fit/trạng thái, sau đó checkpoint đóng băng trên validation/test. BKT Frozen là thử nghiệm đối chứng, không phải một thuật toán BKT được huấn luyện riêng.
+
+`bkt_online` là policy vận hành adaptive: dự đoán sự kiện trước, rồi mới cập nhật trạng thái bằng label của sự kiện đó cho lần tiếp theo. Trạng thái mới có thể được dùng để tạo learner profile, knowledge gaps và nội dung đề xuất tiếp theo. Policy này chỉ dùng lịch sử đã quan sát nhưng có nhiều thông tin hơn policy frozen ở các event xảy ra sau, nên không so sánh `bkt_online` với NCDM như hai policy lịch sử giống nhau.
+
+NCDM bổ sung chẩn đoán proficiency theo concept và dùng checkpoint tĩnh trong inference hiện tại. Nó không nhận response mới để update tức thời; checkpoint phải được retrain/fine-tune định kỳ. Threshold mặc định là 0,5; nếu sau này chọn threshold khác, chỉ được fit quy tắc trên validation và phải ghi vào config/manifest. Xem [ALGORITHMS.md](ALGORITHMS.md) để biết cơ chế của ba phương pháp.
 
 ## Run Data Quality & EDA
 
