@@ -1,5 +1,5 @@
 # File: src/moocradar/pipeline.py
-# Purpose: Run training, temporal evaluation, profiling, and recommendations.
+# Purpose: Run training, temporal evaluation (4.3.1-4.3.5), and decision outputs using the selected smoothed_concept model (4.3.6 & 4.4).
 
 import csv
 import json
@@ -15,7 +15,8 @@ import yaml
 
 from .evaluation import evaluate
 from .modeling import (baseline_predict, bkt_predict, bkt_update, fit_models,
-                       iter_students, load_links, save_models, split_name)
+                       iter_students, load_links, save_models, split_name,
+                       student_concept_mastery)
 from .recommendation import build_course_index, gaps_for_course, recommend
 
 LOG = logging.getLogger(__name__)
@@ -45,12 +46,15 @@ def train(processed_dir: Path, artifact_root: Path, *, seed: int = 42,
     run_dir.mkdir(parents=True, exist_ok=False)
     config = {"processed_dir": str(processed_dir), "seed": seed,
               "mastery_target": mastery_target, "top_n": top_n,
+              "selected_decision_model": "smoothed_concept",
               "split": "per_student_chronological_70_15_15_min5"}
     (run_dir / "config.yaml").write_text(yaml.safe_dump(config), encoding="utf-8")
     shutil.copy2(processed_dir / "data_quality.json", run_dir / "data_quality.json")
     quality_report = json.loads((processed_dir / "data_quality.json").read_text())
     manifest = {"run_id": run_id, "created_at_utc": datetime.now(timezone.utc).isoformat(),
-                "status": "running", "seed": seed, "models": ["smoothed_concept", "bkt"],
+                "status": "running", "seed": seed,
+                "models": ["smoothed_concept", "bkt"],
+                "selected_decision_model": "smoothed_concept",
                 "dataset_version": quality_report.get("source_files", {}),
                 "data_quality_mode": quality_report["mode"]}
     manifest_path = run_dir / "manifest.json"
@@ -86,7 +90,9 @@ def train(processed_dir: Path, artifact_root: Path, *, seed: int = 42,
                     continue
                 counts["students"] += 1
                 plot_stats["student_lengths"].append(len(rows))
-                states = {}
+                bkt_states = {}
+                student_counts = defaultdict(lambda: [0, 0])
+                student_overall = [0, 0]
                 observations = Counter()
                 bloom = defaultdict(lambda: [0, 0])
                 seen_problems = set()
@@ -119,22 +125,35 @@ def train(processed_dir: Path, artifact_root: Path, *, seed: int = 42,
                         plot_stats["bloom"][level][0] += 1
                         plot_stats["bloom"][level][1] += correct
                     if split in ("validation", "test"):
-                        p_base = baseline_predict(cids, baseline)
-                        p_bkt = (sum(bkt_predict(states.get(cid, bkt["initial"]), bkt) for cid in cids) / len(cids)) if cids else bkt_predict(bkt["initial"], bkt)
+                        # Predict BEFORE updating student history (warm-start, zero future leakage)
+                        p_base = baseline_predict(cids, baseline, student_counts, student_overall)
+                        p_bkt = (
+                            sum(bkt_predict(bkt_states.get(cid, bkt["initial"]), bkt) for cid in cids) / len(cids)
+                            if cids else bkt_predict(bkt["initial"], bkt)
+                        )
                         for model, probability in (("smoothed_concept", p_base), ("bkt", p_bkt)):
                             predictions.writerow({"log_id": row["log_id"], "user_id": user_id,
                                                  "problem_id": problem_id, "split": split,
                                                  "model": model, "is_correct": correct,
                                                  "probability_correct": round(probability, 8)})
+                    # Update both models with observed response
+                    student_overall[0] += correct
+                    student_overall[1] += 1
                     for cid in cids:
-                        states[cid] = bkt_update(states.get(cid, bkt["initial"]), correct, bkt)
+                        student_counts[cid][0] += correct
+                        student_counts[cid][1] += 1
+                        bkt_states[cid] = bkt_update(bkt_states.get(cid, bkt["initial"]), correct, bkt)
                         observations[cid] += 1
-                for cid, value in states.items():
+                # Section 4.3.6 & 4.4: Use the selected smoothed_concept model for learner profiles & learning paths
+                selected_mastery = {}
+                for cid in sorted(observations):
                     n = observations[cid]
+                    m_val = student_concept_mastery(cid, baseline, student_counts, student_overall)
+                    selected_mastery[cid] = m_val
                     mastery_writer.writerow({
                         "user_id": user_id, "concept_id": cid,
-                        "concept_name_zh": names.get(cid, ""), "mastery": round(value, 6),
-                        "probability_correct": round(bkt_predict(value, bkt), 6),
+                        "concept_name_zh": names.get(cid, ""), "mastery": round(m_val, 6),
+                        "probability_correct": round(m_val, 6),
                         "observations": n, "confidence": round(n / (n + 5), 6),
                         "insufficient_evidence": int(n < 3),
                     })
@@ -143,7 +162,7 @@ def train(processed_dir: Path, artifact_root: Path, *, seed: int = 42,
                                            "observations": n, "correct": correct,
                                            "accuracy": round(correct / n, 6)})
                 if target_course:
-                    gaps = gaps_for_course(user_id, target_course, states, observations,
+                    gaps = gaps_for_course(user_id, target_course, selected_mastery, observations,
                                            course_index, mastery_target)[:20]
                     gap_writer.writerows(gaps)
                     paths = recommend(user_id, target_course, gaps,
