@@ -1,0 +1,4 @@
+# File: demo/requirements.txt
+# Purpose: Extra dependencies for the Streamlit demo (core pipeline deps are in ../requirements.txt).
+streamlit>=1.50,<2
+plotly>=5.20,<7
