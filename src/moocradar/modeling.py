@@ -1,11 +1,11 @@
 # File: src/moocradar/modeling.py
-# Purpose: Fit a smoothed baseline and global BKT without future-label leakage.
+# Purpose: Fit a student-level smoothed concept baseline (4.3.2) and global BKT (4.3.3) without future-label leakage.
 
 import csv
 import json
 import math
 import random
-from collections import Counter, defaultdict
+from collections import defaultdict
 from itertools import groupby
 from pathlib import Path
 
@@ -123,21 +123,59 @@ def fit_models(processed_dir: Path, seed: int = 42) -> tuple[dict, dict, dict]:
     if global_total == 0:
         raise ValueError("No valid training interactions")
     prior = (global_correct + 1) / (global_total + 2)
-    baseline = {"global_probability": prior, "smoothing": 10, "concept_counts": dict(counts)}
+    baseline = {
+        "global_probability": prior,
+        "smoothing": 10,
+        "student_smoothing": 3,
+        "concept_counts": dict(counts),
+    }
     bkt = fit_bkt(sampled)
     training = {"train_interactions": global_total, "sampled_bkt_sequences": len(sampled), "seed": seed}
     return baseline, bkt, training
 
 
-def baseline_predict(concept_ids: list[str], model: dict) -> float:
+def concept_prior(cid: str, model: dict) -> float:
+    """Compute global smoothed accuracy for a concept from train-only counts."""
     prior = model["global_probability"]
-    alpha = model["smoothing"]
+    alpha = model.get("smoothing", 10)
+    correct, total = model["concept_counts"].get(cid, [0, 0])
+    return (correct + alpha * prior) / (total + alpha)
+
+
+def student_concept_mastery(cid: str, model: dict, student_counts: dict | None = None,
+                            student_overall: list[int] | None = None) -> float:
+    """
+    Section 4.3.2: Per-student concept mastery smoothed toward the concept's global accuracy.
+    - Cold start (0 attempts on cid): falls back to concept_prior(cid) blended with student's prior accuracy.
+    - Warm start (n_u,c > 0): Empirical Bayes smoothing of student's concept accuracy toward concept_prior(cid).
+    """
+    p_c = concept_prior(cid, model)
+    if not student_counts and not student_overall:
+        return p_c
+    beta = model.get("student_smoothing", 3)
+    # Incorporate slight student global ability shift if student has prior history on other concepts
+    if student_overall and student_overall[1] > 0:
+        p_global = model["global_probability"]
+        p_u = (student_overall[0] + 5.0 * p_global) / (student_overall[1] + 5.0)
+        prior_uc = min(max(p_c + 0.35 * (p_u - p_global), 0.02), 0.98)
+    else:
+        prior_uc = p_c
+    u_corr, u_tot = (student_counts or {}).get(cid, (0, 0))
+    return (u_corr + beta * prior_uc) / (u_tot + beta)
+
+
+def baseline_predict(concept_ids: list[str], model: dict, student_counts: dict | None = None,
+                     student_overall: list[int] | None = None) -> float:
+    """Predict probability of correct response using per-student smoothed concept baseline (Section 4.3.2)."""
+    prior = model["global_probability"]
     if not concept_ids:
+        if student_overall and student_overall[1] > 0:
+            return (student_overall[0] + 5.0 * prior) / (student_overall[1] + 5.0)
         return prior
-    values = []
-    for cid in concept_ids:
-        correct, total = model["concept_counts"].get(cid, [0, 0])
-        values.append((correct + alpha * prior) / (total + alpha))
+    values = [
+        student_concept_mastery(cid, model, student_counts, student_overall)
+        for cid in concept_ids
+    ]
     return sum(values) / len(values)
 
 
