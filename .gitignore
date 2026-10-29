@@ -10,3 +10,4 @@ data/processed/
 data/translated/
 artifacts/
 *.log
+demo/.cache/

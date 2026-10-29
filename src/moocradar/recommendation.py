@@ -1,6 +1,7 @@
 # File: src/moocradar/recommendation.py
-# Purpose: Detect evidence-aware knowledge gaps and rank practice problems.
+# Purpose: Detect evidence-aware knowledge gaps and rank practice problems with ZPD & Bloom progression.
 
+import math
 from collections import defaultdict
 
 
@@ -16,14 +17,19 @@ def build_course_index(problems: dict, links: dict) -> dict:
 
 def gaps_for_course(user_id: str, course_id: str, mastery: dict, observations: dict,
                     course_index: dict, target: float = 0.7) -> list[dict]:
-    """Keep unseen concepts unknown; put observed weak concepts first."""
+    """Keep unseen concepts unknown; put observed weak concepts first, weighted by evidence confidence."""
     gaps = []
     for cid in course_index.get(course_id, {}):
         observed = observations.get(cid, 0)
         value = mastery.get(cid) if observed else None
         if value is not None and value >= target:
             continue
-        priority = (target - value) if value is not None else -1.0
+        if value is not None:
+            # Weight gap severity by evidence reliability so multi-error concepts rank highest
+            evidence_weight = 1.0 + 0.12 * min(observed, 5)
+            priority = (target - value) * evidence_weight
+        else:
+            priority = -1.0
         gaps.append({
             "user_id": user_id, "course_id": course_id, "concept_id": cid,
             "mastery": "" if value is None else round(value, 6),
@@ -36,9 +42,17 @@ def gaps_for_course(user_id: str, course_id: str, mastery: dict, observations: d
 
 
 def recommend(user_id: str, course_id: str, gaps: list[dict], problems: dict,
-              links: dict, seen_problems: set[str], top_n: int = 5) -> list[dict]:
-    """Rank course exercises by directly linked gaps and prior exposure."""
+              links: dict, seen_problems: set[str], top_n: int = 5,
+              problem_difficulty: dict | None = None) -> list[dict]:
+    """
+    Rank course exercises by:
+      1. Directly linked knowledge gap priority
+      2. Zone of Proximal Development (ZPD): match problem difficulty to student's current mastery
+      3. Bloom cognitive scaffolding: prefer foundational Bloom levels (1-3) when mastery is low
+      4. Novelty bonus for unseen exercises
+    """
     priority = {gap["concept_id"]: gap["priority"] for gap in gaps}
+    gap_mastery = {gap["concept_id"]: float(gap["mastery"]) for gap in gaps if gap["mastery"] != ""}
     candidates = []
     for problem_id, problem in problems.items():
         if problem["course_id"] != course_id:
@@ -47,7 +61,28 @@ def recommend(user_id: str, course_id: str, gaps: list[dict], problems: dict,
         if not matched:
             continue
         observed = [priority[cid] for cid in matched if priority[cid] >= 0]
-        score = sum(observed) / max(1, len(observed)) + 0.05 * len(matched)
+        base_score = sum(observed) / max(1, len(observed)) + 0.05 * len(matched)
+
+        # Zone of Proximal Development (ZPD) & Bloom Cognitive Alignment bonus
+        known_masteries = [gap_mastery[cid] for cid in matched if cid in gap_mastery]
+        avg_m = sum(known_masteries) / len(known_masteries) if known_masteries else 0.45
+
+        zpd_bonus = 0.0
+        if problem_difficulty and problem_id in problem_difficulty:
+            d_prob = 1.0 / (1.0 + math.exp(-max(min(problem_difficulty[problem_id], 10.0), -10.0)))
+            # Optimal challenge is slightly above or near current mastery
+            zpd_bonus = 0.08 * max(0.0, 1.0 - abs(d_prob - (avg_m + 0.05)))
+
+        bloom_bonus = 0.0
+        try:
+            bloom_lvl = int(problem.get("cognitive_dimension") or 0)
+            if 1 <= bloom_lvl <= 6:
+                target_bloom = 1.0 + 4.0 * avg_m  # Low mastery -> Bloom 1-2; higher -> Bloom 3-5
+                bloom_bonus = 0.05 * max(0.0, 1.0 - abs(bloom_lvl - target_bloom) / 5.0)
+        except (ValueError, TypeError):
+            pass
+
+        score = base_score + zpd_bonus + bloom_bonus
         if problem_id not in seen_problems:
             score += 0.1
         candidates.append((score, problem_id, matched))

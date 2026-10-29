@@ -1,129 +1,168 @@
 # File: src/moocradar/ncdm.py
-# Purpose: Monotonic Neural Cognitive Diagnosis Model implementation.
+# Purpose: Neural Cognitive Diagnosis Model (NCDM) with monotonic diagnostic interaction and online warm-start updates.
 
-from __future__ import annotations
-
-from dataclasses import asdict, dataclass
-from pathlib import Path
-
-import torch
-from torch import nn
-from torch.nn import functional as F
+import math
+import numpy as np
 
 
-@dataclass(frozen=True)
-class NCDMConfig:
-    """Serializable dimensions and architecture settings."""
-
-    student_count: int
-    problem_count: int
-    concept_count: int
-    hidden_dims: tuple[int, ...] = (256, 128)
-    dropout: float = 0.5
-    discrimination_scale: float = 10.0
+def _sigmoid(x):
+    return 1.0 / (1.0 + np.exp(-np.clip(x, -20.0, 20.0)))
 
 
-class NonNegativeLinear(nn.Module):
-    """Linear layer constrained to non-negative weights for monotonicity."""
+def fit_ncdm(train_events: list[dict], links: dict[str, list[str]], problems: dict[str, dict],
+             seed: int = 42, epochs: int = 18, lr: float = 0.08, l2: float = 0.002) -> dict:
+    """
+    Fit a fast, monotonic Neural Cognitive Diagnosis Model (NCDM) on train interactions.
+    Architecture:
+      - Student mastery logits: alpha_{u, k} -> mastery m_{u, k} = sigmoid(alpha_{u, k} + 0.5 * theta_u)
+      - Problem concept difficulty: d_{p, k} = sigmoid(beta_p + 0.5 * beta_c[k])
+      - Problem discrimination (monotonic positive): disc_p = softplus(raw_disc_p)
+      - Cognitive (Bloom) level difficulty offset: bloom_offset[b]
+      - Diagnostic interaction layer:
+          z = global_logit + 4.0 * disc_p * mean_k(m_{u, k} - d_{p, k}) - bloom_offset[b]
+          y_hat = sigmoid(z)
+    """
+    rng = np.random.default_rng(seed)
+    users = sorted({e["user_id"] for e in train_events})
+    probs = sorted(problems.keys())
+    concepts = sorted({cid for cids in links.values() for cid in cids})
 
-    def __init__(self, in_features: int, out_features: int):
-        super().__init__()
-        self.weight = nn.Parameter(torch.empty(out_features, in_features))
-        self.bias = nn.Parameter(torch.zeros(out_features))
-        nn.init.xavier_uniform_(self.weight)
-        with torch.no_grad():
-            self.weight.abs_()
+    u_map = {u: i for i, u in enumerate(users)}
+    p_map = {p: i for i, p in enumerate(probs)}
+    c_map = {c: i for i, c in enumerate(concepts)}
 
-    def forward(self, values: torch.Tensor) -> torch.Tensor:
-        return F.linear(values, self.weight.clamp(min=0), self.bias)
+    n_u = len(users)
+    n_p = len(probs)
+    n_c = len(concepts)
 
-    def clip_nonnegative(self) -> None:
-        with torch.no_grad():
-            self.weight.clamp_(min=0)
+    pos_rate = float(np.mean([e["is_correct"] for e in train_events])) if train_events else 0.75
+    pos_rate = min(max(pos_rate, 0.05), 0.95)
+    global_logit = math.log(pos_rate / (1.0 - pos_rate))
 
+    alpha_uk = np.zeros((n_u, n_c), dtype=np.float64)
+    theta_u = np.zeros(n_u, dtype=np.float64)
+    beta_p = np.zeros(n_p, dtype=np.float64)
+    beta_c = np.zeros(n_c, dtype=np.float64)
+    raw_disc_p = np.full(n_p, 1.2, dtype=np.float64)
+    bloom_offset = np.zeros(7, dtype=np.float64)
 
-class NCDM(nn.Module):
-    """NeuralCDM with Q-masked concept factors and monotonic prediction layers."""
+    indexed = []
+    for e in train_events:
+        u_idx = u_map.get(e["user_id"])
+        p_idx = p_map.get(e["problem_id"])
+        if u_idx is None or p_idx is None:
+            continue
+        c_idxs = [c_map[c] for c in links.get(e["problem_id"], []) if c in c_map]
+        b_lvl = int(problems.get(e["problem_id"], {}).get("cognitive_dimension") or 0)
+        b_lvl = b_lvl if 1 <= b_lvl <= 6 else 0
+        indexed.append((u_idx, p_idx, c_idxs, b_lvl, float(e["is_correct"])))
 
-    def __init__(self, config: NCDMConfig):
-        super().__init__()
-        if not config.hidden_dims:
-            raise ValueError("hidden_dims must not be empty")
-        self.config = config
-        self.student_proficiency = nn.Embedding(config.student_count, config.concept_count)
-        self.exercise_difficulty = nn.Embedding(config.problem_count, config.concept_count)
-        self.exercise_discrimination = nn.Embedding(config.problem_count, 1)
-        nn.init.xavier_normal_(self.student_proficiency.weight)
-        nn.init.xavier_normal_(self.exercise_difficulty.weight)
-        nn.init.xavier_normal_(self.exercise_discrimination.weight)
+    order = np.arange(len(indexed))
+    for epoch in range(epochs):
+        rng.shuffle(order)
+        step_lr = lr / (1.0 + 0.08 * epoch)
+        for idx in order:
+            u_idx, p_idx, c_idxs, b_lvl, y = indexed[idx]
+            disc = math.log1p(math.exp(raw_disc_p[p_idx]))
+            d_sig_disc = 1.0 / (1.0 + math.exp(-raw_disc_p[p_idx]))
 
-        layers: list[nn.Module] = []
-        input_size = config.concept_count
-        for hidden_size in config.hidden_dims:
-            layers.extend([
-                NonNegativeLinear(input_size, hidden_size),
-                nn.Sigmoid(),
-                nn.Dropout(config.dropout),
-            ])
-            input_size = hidden_size
-        layers.append(NonNegativeLinear(input_size, 1))
-        self.prediction = nn.Sequential(*layers)
+            if c_idxs:
+                m_uk = _sigmoid(alpha_uk[u_idx, c_idxs] + 0.5 * theta_u[u_idx])
+                d_pk = _sigmoid(beta_p[p_idx] + 0.5 * beta_c[c_idxs])
+                diff_gap = float(np.mean(m_uk - d_pk))
+            else:
+                m_uk = np.array([_sigmoid(theta_u[u_idx])])
+                d_pk = np.array([_sigmoid(beta_p[p_idx])])
+                diff_gap = float(m_uk[0] - d_pk[0])
 
-    def forward(self, student_ids: torch.Tensor, problem_ids: torch.Tensor,
-                q_matrix_rows: torch.Tensor) -> torch.Tensor:
-        proficiency = torch.sigmoid(self.student_proficiency(student_ids))
-        difficulty = torch.sigmoid(self.exercise_difficulty(problem_ids))
-        discrimination = (
-            torch.sigmoid(self.exercise_discrimination(problem_ids))
-            * self.config.discrimination_scale
-        )
-        interaction = discrimination * (proficiency - difficulty) * q_matrix_rows
-        return torch.sigmoid(self.prediction(interaction)).squeeze(-1)
+            z = global_logit + 4.0 * disc * diff_gap - bloom_offset[b_lvl]
+            pred = 1.0 / (1.0 + math.exp(-max(min(z, 20.0), -20.0)))
+            err = pred - y
 
-    def mastery(self, student_ids: torch.Tensor) -> torch.Tensor:
-        """Return concept-level student proficiency, not response probability."""
-        return torch.sigmoid(self.student_proficiency(student_ids))
+            grad_disc = err * 4.0 * diff_gap * d_sig_disc + l2 * (raw_disc_p[p_idx] - 1.2)
+            raw_disc_p[p_idx] = float(np.clip(raw_disc_p[p_idx] - step_lr * grad_disc, -1.5, 3.5))
 
-    def clip_nonnegative(self) -> None:
-        """Project prediction-layer weights onto the monotonic feasible set."""
-        for module in self.prediction.modules():
-            if isinstance(module, NonNegativeLinear):
-                module.clip_nonnegative()
+            if b_lvl > 0:
+                bloom_offset[b_lvl] += step_lr * (err - l2 * bloom_offset[b_lvl]) * 0.25
 
-    def export_config(self) -> dict:
-        config = asdict(self.config)
-        config["hidden_dims"] = list(self.config.hidden_dims)
-        return config
+            if c_idxs:
+                k_len = len(c_idxs)
+                grad_m = (err * 4.0 * disc / k_len) * (m_uk * (1.0 - m_uk))
+                grad_d = -(err * 4.0 * disc / k_len) * (d_pk * (1.0 - d_pk))
 
+                alpha_uk[u_idx, c_idxs] -= step_lr * (grad_m + l2 * alpha_uk[u_idx, c_idxs])
+                theta_u[u_idx] -= step_lr * (0.5 * float(np.sum(grad_m)) + l2 * theta_u[u_idx])
+                beta_p[p_idx] -= step_lr * (float(np.sum(grad_d)) + l2 * beta_p[p_idx])
+                beta_c[c_idxs] -= step_lr * (0.5 * grad_d + l2 * beta_c[c_idxs])
+            else:
+                dm = float(m_uk[0] * (1.0 - m_uk[0]))
+                dd = float(d_pk[0] * (1.0 - d_pk[0]))
+                theta_u[u_idx] -= step_lr * (err * 4.0 * disc * dm + l2 * theta_u[u_idx])
+                beta_p[p_idx] -= step_lr * (-err * 4.0 * disc * dd + l2 * beta_p[p_idx])
 
-def save_ncdm_checkpoint(path: Path, model: NCDM, *, epoch: int,
-                         validation_metric: float, optimizer: torch.optim.Optimizer | None = None,
-                         training_config: dict | None = None) -> None:
-    """Save enough state for inference and optional optimizer resume."""
-    path.parent.mkdir(parents=True, exist_ok=True)
-    payload = {
-        "model_state": model.state_dict(),
-        "model_config": model.export_config(),
-        "epoch": epoch,
-        "validation_metric": validation_metric,
-        "training_config": training_config or {},
+    return {
+        "global_logit": round(global_logit, 6),
+        "online_lr": 0.35,
+        "bloom_offset": {str(i): round(float(bloom_offset[i]), 6) for i in range(1, 7)},
+        "problem_difficulty": {p: round(float(beta_p[p_map[p]]), 6) for p in probs},
+        "problem_discrimination": {p: round(float(math.log1p(math.exp(raw_disc_p[p_map[p]]))), 6) for p in probs},
+        "concept_difficulty": {c: round(float(beta_c[c_map[c]]), 6) for c in concepts},
     }
-    if optimizer is not None:
-        payload["optimizer_state"] = optimizer.state_dict()
-    torch.save(payload, path)
 
 
-def load_ncdm_checkpoint(path: Path, device: str | torch.device = "cpu") -> tuple[NCDM, dict]:
-    """Restore an NCDM checkpoint without retraining."""
-    target = torch.device(device)
-    try:
-        payload = torch.load(path, map_location=target, weights_only=False)
-    except TypeError:  # PyTorch before weights_only was introduced.
-        payload = torch.load(path, map_location=target)
-    raw_config = dict(payload["model_config"])
-    raw_config["hidden_dims"] = tuple(raw_config["hidden_dims"])
-    model = NCDM(NCDMConfig(**raw_config))
-    model.load_state_dict(payload["model_state"])
-    model.to(target)
-    model.eval()
-    return model, payload
+def ncdm_init_student() -> dict:
+    """Initialize a student's cognitive diagnosis state for online warm-start tracking."""
+    return {"theta": 0.0, "alpha": {}}
+
+
+def ncdm_concept_mastery(state: dict, cid: str) -> float:
+    """Return latent mastery probability in (0, 1) for a concept under NCDM."""
+    logit = state["alpha"].get(cid, 0.0) + 0.5 * state["theta"]
+    return 1.0 / (1.0 + math.exp(-max(min(logit, 20.0), -20.0)))
+
+
+def ncdm_predict(state: dict, problem_id: str, cids: list[str], bloom_level: int | str | None, model: dict) -> float:
+    """Predict probability of a correct response using NCDM item difficulty & discrimination."""
+    global_logit = model.get("global_logit", 0.0)
+    disc = model.get("problem_discrimination", {}).get(problem_id, 1.3)
+    b_p = model.get("problem_difficulty", {}).get(problem_id, 0.0)
+    c_diffs = model.get("concept_difficulty", {})
+    b_off = model.get("bloom_offset", {}).get(str(bloom_level or ""), 0.0)
+
+    if cids:
+        gaps = []
+        for cid in cids:
+            m_uk = ncdm_concept_mastery(state, cid)
+            d_pk = 1.0 / (1.0 + math.exp(-max(min(b_p + 0.5 * c_diffs.get(cid, 0.0), 20.0), -20.0)))
+            gaps.append(m_uk - d_pk)
+        diff_gap = sum(gaps) / len(gaps)
+    else:
+        m_u = 1.0 / (1.0 + math.exp(-max(min(state["theta"], 20.0), -20.0)))
+        d_p = 1.0 / (1.0 + math.exp(-max(min(b_p, 20.0), -20.0)))
+        diff_gap = m_u - d_p
+
+    z = global_logit + 4.0 * disc * diff_gap - b_off
+    return 1.0 / (1.0 + math.exp(-max(min(z, 20.0), -20.0)))
+
+
+def ncdm_update(state: dict, problem_id: str, cids: list[str], bloom_level: int | str | None,
+                correct: int, model: dict) -> None:
+    """Online gradient / Bayesian mastery state update after observing a student's response."""
+    pred = ncdm_predict(state, problem_id, cids, bloom_level, model)
+    err = pred - float(correct)
+    disc = model.get("problem_discrimination", {}).get(problem_id, 1.3)
+    lr = model.get("online_lr", 0.35)
+
+    if cids:
+        k_len = len(cids)
+        total_grad_m = 0.0
+        for cid in cids:
+            m_uk = ncdm_concept_mastery(state, cid)
+            grad_m = (err * 4.0 * disc / k_len) * (m_uk * (1.0 - m_uk))
+            state["alpha"][cid] = max(min(state["alpha"].get(cid, 0.0) - lr * grad_m, 6.0), -6.0)
+            total_grad_m += grad_m
+        state["theta"] = max(min(state["theta"] - lr * 0.4 * total_grad_m, 5.0), -5.0)
+    else:
+        m_u = 1.0 / (1.0 + math.exp(-max(min(state["theta"], 20.0), -20.0)))
+        grad_theta = err * 4.0 * disc * (m_u * (1.0 - m_u))
+        state["theta"] = max(min(state["theta"] - lr * 0.4 * grad_theta, 5.0), -5.0)

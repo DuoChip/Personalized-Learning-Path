@@ -1,0 +1,53 @@
+{
+  "problems": 60,
+  "bloom_2": 10,
+  "bloom_3": 10,
+  "bloom_4": 10,
+  "bloom_5": 10,
+  "bloom_6": 10,
+  "bloom_1": 10,
+  "concepts": 15,
+  "problem_concept_links": 116,
+  "courses": 3,
+  "exercises": 21,
+  "student_sequences": 25,
+  "interactions": 616,
+  "label_0": 254,
+  "missing_score": 123,
+  "label_1": 362,
+  "distinct_log_ids": 616,
+  "distinct_students": 25,
+  "distinct_interacted_problems": 60,
+  "student_sequence_length": {
+    "min": 15,
+    "median": 24,
+    "max": 35
+  },
+  "correct_rate": 0.587662,
+  "mode": "sample",
+  "max_students": 25,
+  "missing_log_id": 0,
+  "missing_user_id": 0,
+  "missing_problem_id": 0,
+  "missing_is_correct": 0,
+  "missing_submit_time": 0,
+  "missing_attempts": 0,
+  "unknown_problem_id": 0,
+  "invalid_is_correct": 0,
+  "invalid_submit_time": 0,
+  "duplicate_log_id": 0,
+  "invalid_attempts": 0,
+  "invalid_score": 0,
+  "missing_problem_course_id": 0,
+  "missing_problem_exercise_id": 0,
+  "source_files": {
+    "problem.json": {
+      "bytes": 26869,
+      "sha256": "da834a6957211aae95bf845d42a944365c9770e5fe3bee458b5bc5d1957ed3cd"
+    },
+    "student-problem-fine.json": {
+      "bytes": 171154,
+      "sha256": "9a46c7a1190e505255889e930249246fc45f78948b0d6e88505a18626b08114d"
+    }
+  }
+}

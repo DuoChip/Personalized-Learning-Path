@@ -230,6 +230,8 @@ Notebook EDA hỗ trợ local/Colab; trên Colab nó mount Drive, cài requireme
 
 Kết quả chạy trên Colab được lưu tại [thư mục Google Drive của dự án](https://drive.google.com/drive/folders/1o07j0q612DXwAVOrbIzeioMYRTqwKZ44?usp=sharing).
 
+Kết quả chạy trên Google Colab được lưu tại [thư mục Google Drive của dự án](https://drive.google.com/drive/folders/1o07j0q612DXwAVOrbIzeioMYRTqwKZ44?usp=sharing).
+
 ## 15. Artifacts được lưu
 
 Artifact mô hình chính thức của dự án là `artifacts/20261020T160618189951Z_ncdm_3d00a8/`. Run này có `status: complete`, chứa checkpoint NCDM tốt nhất, mappings, Q-matrix, predictions, metrics, mastery, gaps, learning paths và plots. Theo quy ước dự án, frontend, demo và báo cáo kết quả phải được cấu hình trỏ vào run này.

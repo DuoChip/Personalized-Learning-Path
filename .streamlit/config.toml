@@ -1,0 +1,15 @@
+# File: .streamlit/config.toml
+# Purpose: Light theme for the Streamlit demo in demo/app.py.
+
+[theme]
+base = "light"
+primaryColor = "#4F46E5"
+backgroundColor = "#F8FAFC"
+secondaryBackgroundColor = "#EEF2FF"
+textColor = "#0F172A"
+
+[browser]
+gatherUsageStats = false
+
+[client]
+toolbarMode = "minimal"
