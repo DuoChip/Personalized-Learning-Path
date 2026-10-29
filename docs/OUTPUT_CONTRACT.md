@@ -1,6 +1,8 @@
 # Hợp đồng đầu ra cho nhóm dashboard và frontend
 
-Mỗi lần chạy tạo thư mục `artifacts/<run_id>/` mới; không ghi đè run cũ. Kiểm tra `manifest.json` có `status: complete` trước khi dùng. CSV dùng UTF-8, có header kể cả khi không có dòng dữ liệu. ID sinh viên là ID từ bộ dữ liệu gốc và cần được xử lý phù hợp khi chia sẻ.
+Mỗi lần chạy tạo thư mục `artifacts/<run_id>/` mới; không ghi đè run cũ. Artifact chính thức hiện tại là `artifacts/20261020T160618189951Z_ncdm_3d00a8/`. Frontend và inference phải trỏ tường minh vào run này và kiểm tra `manifest.json` có `status: complete` trước khi dùng.
+
+Các run mô hình trước đây nằm trong `artifacts/OLD/` và chỉ được giữ để truy vết; không tự động chọn file mới nhất bên trong thư mục này. Run `artifacts/eda_20261017T155226873628Z_da4915/` là EDA sample độc lập, không phải checkpoint mô hình. CSV dùng UTF-8, có header kể cả khi không có dòng dữ liệu. ID sinh viên là ID từ bộ dữ liệu gốc và cần được xử lý phù hợp khi chia sẻ.
 
 ## Run huấn luyện mô hình
 
@@ -9,18 +11,49 @@ Mỗi lần chạy tạo thư mục `artifacts/<run_id>/` mới; không ghi đè
 | `config.yaml`, `manifest.json` | Cấu hình, seed, thời điểm UTC, nguồn dữ liệu, trạng thái | Tái lập run |
 | `data_quality.json` | Thống kê từ bước chuẩn hóa | Kiểm tra nguồn dữ liệu đã xử lý |
 | `split_indices.csv` | `log_id,user_id,sequence_position,split` | Một lượt thuộc train/validation/test |
-| `predictions.csv` | `log_id,user_id,problem_id,split,model,is_correct,probability_correct` | Một dự đoán ở cấp câu hỏi cho mỗi mô hình trên validation/test |
-| `metrics.csv` | `model,split,n,roc_auc,accuracy,f1,brier,tp,tn,fp,fn` | Chỉ số tại ngưỡng 0,5; AUC để trống nếu chỉ có một lớp |
-| `student_mastery.csv` | `user_id,concept_id,concept_name_zh,mastery,probability_correct,observations,confidence,insufficient_evidence` | Trạng thái BKT cuối cùng cho concept đã quan sát |
+| `predictions.csv` | Trường lõi: `log_id,user_id,problem_id,split,model,is_correct,probability_correct`; run NCDM thêm `evaluation_protocol,cold_start_problem` | Một dự đoán ở cấp câu hỏi cho mỗi mô hình trên validation/test |
+| `metrics.csv` | `model,split,n,threshold,roc_auc,pr_auc,accuracy,balanced_accuracy,f1,precision,recall,specificity,brier,prevalence,positive_prediction_rate,tp,tn,fp,fn` | Chỉ số tại threshold đã khai báo; AUC để trống nếu chỉ có một lớp |
+| `student_mastery.csv` | Trường BKT cũ và, với NCDM: `mastery_probability,mastery_level,observation_count,evidence_status,model_name,run_id` | Proficiency theo student–concept cùng mức bằng chứng |
 | `cognitive_profile.csv` | `user_id,cognitive_dimension,observations,correct,accuracy` | Tỷ lệ đúng thực nghiệm theo mã Bloom |
 | `knowledge_gaps.csv` | `user_id,course_id,concept_id,mastery,observations,evidence_status,priority` | Tối đa 20 gap trong khóa học đích |
 | `learning_paths.csv` | `user_id,course_id,rank,activity_type,problem_id,concept_ids,score,reason` | Bài tập được xếp thứ tự; `concept_ids` phân tách bằng dấu `|` |
 | `models/baseline.json`, `models/bkt.json` | Tham số mô hình | Suy luận không cần train lại |
-| `plots/`, `logs/training.log` | PNG, chú thích, log | Biểu đồ và tiến trình chạy |
+| `models/best_ncdm.pt` | Model state, kiến trúc, best epoch và optimizer state | Load NCDM/inference hoặc resume không cần train từ đầu |
+| `models/id_mappings.json`, `models/q_matrix.npz` | Mapping ổn định và Q-matrix COO nén | Khôi phục đúng ID/granularity khi inference |
+| `training_history.csv` | `epoch,train_loss,validation_roc_auc,validation_brier` | Dữ liệu gốc của training curves |
+| `plots/`, `logs/training.log` | PNG và log | Loss, validation AUC, ROC, PR, confusion matrix, probability distribution |
 
-`mastery` là xác suất trạng thái kiến thức tiềm ẩn đã học. `probability_correct` còn xét tham số guess/slip nên là đại lượng khác. `confidence = n/(n+5)` và `insufficient_evidence = n<3` chỉ là heuristic hỗ trợ hiển thị. Concept chưa quan sát không có dòng trong `student_mastery.csv`; ở `knowledge_gaps.csv`, mastery của concept đó để trống và `evidence_status=unobserved`.
+## Dùng file nào cho chức năng nào?
 
-Frontend lọc theo `user_id`, sắp xếp lộ trình theo `rank` dạng số, rồi nối `concept_id` với `data/processed/<mode>/concepts.csv`. Nếu có bản dịch đã điền, nối `problem_id` với `data/translated/problem_text_en.csv`; ô tiếng Anh trống nghĩa là chưa dịch. Lệnh `demo` xuất hồ sơ và lộ trình dạng JSON, có thể cập nhật với một lượt trả lời mới.
+```text
+predictions.csv -> metrics.csv/plots       (đánh giá model)
+NCDM checkpoint -> student_mastery.csv     (hồ sơ concept)
+student_mastery.csv -> knowledge_gaps.csv  (concept cần hỗ trợ)
+knowledge_gaps.csv -> learning_paths.csv   (Top-N bài luyện tập)
+```
+
+- Dashboard so sánh model đọc `metrics.csv`; chỉ mở `predictions.csv` khi cần xem chi tiết từng event.
+- Learner profile đọc `student_mastery.csv`, ưu tiên hiển thị `mastery_probability`, `mastery_level`, `observation_count` và `evidence_status`.
+- Màn hình điểm yếu đọc `knowledge_gaps.csv`; `priority` là điểm ưu tiên heuristic, không phải xác suất.
+- Màn hình đề xuất đọc `learning_paths.csv`, lọc theo `user_id` và sắp xếp `rank`; `score` là điểm ranking, không phải `probability_correct`.
+
+Trong artifact chính thức, bốn model cùng xuất dự đoán để đánh giá, nhưng `student_mastery.csv`, `knowledge_gaps.csv` và `learning_paths.csv` được sinh từ NCDM. Không lấy `probability_correct` của BKT/NCDM trong `predictions.csv` rồi ghi thành mastery. Xem [ALGORITHMS.md](ALGORITHMS.md#luồng-đầu-vào-và-đầu-ra-trong-dự-án) để biết ví dụ end-to-end.
+
+Trong run BKT, `mastery` là xác suất trạng thái tiềm ẩn đã học và `probability_correct` còn xét guess/slip. Trong run NCDM, `mastery` và `mastery_probability` đều lấy từ `sigmoid(student_proficiency)`; `probability_correct` để trống vì đại lượng đó chỉ có nghĩa khi kết hợp thêm problem, Q-row, difficulty, discrimination và prediction network. Không dùng xác suất đúng của một problem thay cho mastery.
+
+`confidence = n/(n+5)`, `insufficient_evidence = n<3`, `mastery_level` và threshold mastery là heuristic hiển thị. NCDM có thể xuất proficiency cho concept chưa quan sát trong khóa học đích, nhưng dòng đó phải có `observation_count=0`, `insufficient_evidence=1`, `evidence_status=unobserved_model_estimate`; đây không phải năng lực đã được xác nhận. Run BKT cũ chỉ có dòng cho concept đã quan sát.
+
+Frontend lọc theo `user_id`, sắp xếp lộ trình theo `rank` dạng số và đọc `manifest.json` để biết model/granularity. Với `fine`, nối `concept_id` với `data/processed/<mode>/concepts.csv`; với `middle/coarse`, dùng `concept_names` trong `models/id_mappings.json` (hiện là ID exercise/course). Nếu có bản dịch đã điền, nối `problem_id` với `data/translated/problem_text_en.csv`; ô tiếng Anh trống nghĩa là chưa dịch.
+
+Lệnh `demo --model ncdm` load `best_ncdm.pt`, mappings và Q-matrix. NCDM không nhận `--new-problem-id/--new-is-correct` vì chưa có cơ chế update thời gian thực; frontend dùng BKT cho luồng đó hoặc chờ checkpoint NCDM retrain định kỳ.
+
+## Chính sách so sánh trong run NCDM
+
+`smoothed_concept`, `bkt_frozen` và `ncdm` là protocol chính: chỉ dùng train để fit/trạng thái, sau đó checkpoint đóng băng trên validation/test. BKT Frozen là thử nghiệm đối chứng, không phải một thuật toán BKT được huấn luyện riêng.
+
+`bkt_online` là policy vận hành adaptive: dự đoán sự kiện trước, rồi mới cập nhật trạng thái bằng label của sự kiện đó cho lần tiếp theo. Trạng thái mới có thể được dùng để tạo learner profile, knowledge gaps và nội dung đề xuất tiếp theo. Policy này chỉ dùng lịch sử đã quan sát nhưng có nhiều thông tin hơn policy frozen ở các event xảy ra sau, nên không so sánh `bkt_online` với NCDM như hai policy lịch sử giống nhau.
+
+NCDM bổ sung chẩn đoán proficiency theo concept và dùng checkpoint tĩnh trong inference hiện tại. Nó không nhận response mới để update tức thời; checkpoint phải được retrain/fine-tune định kỳ. Threshold mặc định là 0,5; nếu sau này chọn threshold khác, chỉ được fit quy tắc trên validation và phải ghi vào config/manifest. Xem [ALGORITHMS.md](ALGORITHMS.md) để biết cơ chế của ba phương pháp.
 
 ## Run Data Quality & EDA
 

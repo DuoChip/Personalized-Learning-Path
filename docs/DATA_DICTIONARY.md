@@ -11,7 +11,7 @@ Bốn file được chuyển nguyên trạng vào `data/raw/`. Dung lượng dư
 | `student-problem-middle.json` | JSON array cùng cấu trúc | 201.525.773 | Chuỗi có `skill_id` ở cấp exercise |
 | `student-problem-coarse.json` | JSON array cùng cấu trúc | 197.158.175 | Chuỗi có `skill_id` ở cấp course |
 
-Luồng modeling và EDA chi tiết dùng file `fine`; hai mức còn lại được giữ để nghiên cứu tiếp. Notebook EDA chỉ lấy mẫu schema của chúng, không tự nhận đã quét toàn bộ hai file này.
+Luồng chuẩn hóa và EDA chi tiết dùng event từ file `fine`. NCDM không đọc lại label từ file middle/coarse: granularity `middle` được tái tạo bằng `problem_id → exercise_id`, `coarse` bằng `problem_id → course_id`, và `fine` bằng `problem_concepts.csv`. Cách này giữ nguyên event IDs, label và split giữa các model. Notebook EDA chỉ lấy mẫu schema của hai file middle/coarse, không tự nhận đã quét toàn bộ chúng.
 
 ## Bảng và khóa liên kết
 
